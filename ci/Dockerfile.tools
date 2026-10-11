@@ -1,0 +1,6 @@
+FROM archlinux@sha256:4e77cf2ea5f410e6f8be5abf93ccf17ce2436e87a138c167208356711a405dbd
+RUN pacman -Syu --noconfirm --needed base-devel namcap && pacman -Scc --noconfirm
+ARG CI_UID=1001
+RUN useradd --create-home --uid "$CI_UID" ci
+USER ci
+WORKDIR /home/ci

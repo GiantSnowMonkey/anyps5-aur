@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+tool=$(basename "$0")
+case "$tool" in
+  makepkg|namcap) ;;
+  *) echo "Unsupported Arch tool: $tool" >&2; exit 1 ;;
+esac
+: "${GITHUB_WORKSPACE:?This wrapper is for GitHub Actions}"
+exec docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --env HOME=/home/ci \
+  --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE" \
+  --workdir "$PWD" \
+  anyps5-ci-tools:local "$tool" "$@"

@@ -1,0 +1,128 @@
+name: Build AnyPS5
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 9 * * *'
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - PKGBUILD.template
+      - pipeline.py
+      - test_pipeline.py
+      - ci/**
+      - .github/workflows/build.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: anyps5-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check scripts
+        run: |
+          python3 -m unittest -v test_pipeline.py
+          python3 -m py_compile pipeline.py ci/collect.py
+          bash -n ci/arch-tool
+
+      - name: Resolve upstream commit
+        id: upstream
+        run: |
+          commit=$(git ls-remote https://github.com/boykopovar/AnyPS5.git HEAD | awk '{print $1}')
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Restore validated artifacts
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ci-artifacts
+          key: anyps5-ci-v1-${{ runner.os }}-${{ steps.upstream.outputs.commit }}-${{ hashFiles('Dockerfile', 'PKGBUILD.template', 'pipeline.py', 'test_pipeline.py', 'ci/**', '.github/workflows/build.yml') }}
+
+      - name: Install tested Mint distribution
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/slimtoolkit/slim/releases/download/1.40.11/dist_linux.tar.gz \
+            --output "$RUNNER_TEMP/mint.tar.gz"
+          tar -xzf "$RUNNER_TEMP/mint.tar.gz" -C "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/dist_linux/mint" "$RUNNER_TEMP/dist_linux/mint-sensor" /usr/local/bin/
+          mint --version
+          sha256sum "$RUNNER_TEMP/mint.tar.gz"
+
+      - name: Prepare Arch packaging tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          docker build -f ci/Dockerfile.tools --build-arg CI_UID="$(id -u)" -t anyps5-ci-tools:local ci
+          mkdir -p "$RUNNER_TEMP/arch-bin"
+          install -m 0755 ci/arch-tool "$RUNNER_TEMP/arch-bin/makepkg"
+          install -m 0755 ci/arch-tool "$RUNNER_TEMP/arch-bin/namcap"
+          echo "$RUNNER_TEMP/arch-bin" >> "$GITHUB_PATH"
+
+      - name: Build and validate
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          UPSTREAM_COMMIT: ${{ steps.upstream.outputs.commit }}
+        run: |
+          python3 pipeline.py --no-sudo --jobs 2 --commit "$UPSTREAM_COMMIT"
+          python3 ci/collect.py
+
+      - name: Verify downloadable artifacts
+        run: |
+          cd ci-artifacts
+          sha256sum -c SHA256SUMS
+
+      - name: Cache validated artifacts
+        if: success() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ci-artifacts
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Upload validated package and source
+        uses: actions/upload-artifact@v4
+        with:
+          name: anyps5-${{ steps.upstream.outputs.commit }}-${{ github.run_id }}
+          path: ci-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: anyps5-failure-${{ github.run_id }}
+          path: |
+            output/**/*.log
+            output/**/inputs.json
+            state/docker-info.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Write run summary
+        env:
+          UPSTREAM_COMMIT: ${{ steps.upstream.outputs.commit }}
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: |
+          {
+            echo '### AnyPS5 package validated'
+            echo "Upstream commit: $UPSTREAM_COMMIT"
+            echo "Reused validated artifacts: $CACHE_HIT"
+            echo 'Download the artifact below this workflow run for the package, corresponding source, checksums, and logs.'
+            echo 'Skipped tests remain unvalidated; no game execution or AUR publishing is included.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,3 +1,5 @@
 output/
 state/
 __pycache__/
+
+ci-artifacts/
