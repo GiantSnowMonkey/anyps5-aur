@@ -1,0 +1,19 @@
+# Maintainer: yeti (local build)
+pkgname=anyps5-local-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="AnyPS5 relinker and runtime libraries from a validated local source build"
+arch=('x86_64')
+url='https://github.com/boykopovar/AnyPS5'
+license=('GPL-2.0-only')
+depends=('glibc' 'gcc-libs')
+options=('!strip' '!debug')
+source=('anyps5-local.tar.gz')
+sha256sums=('@CHECKSUM@')
+package() {
+    install -Dm755 "$srcdir/relinker" "$pkgdir/usr/bin/anyps5-relinker"
+    install -d "$pkgdir/usr/lib/anyps5"
+    cp -a "$srcdir/libs/." "$pkgdir/usr/lib/anyps5/"
+    install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$srcdir/upstream-commit.txt" "$pkgdir/usr/share/doc/$pkgname/upstream-commit.txt"
+}
